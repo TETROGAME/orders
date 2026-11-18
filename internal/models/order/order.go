@@ -125,13 +125,13 @@ func NewOrder(customerID string, items []Item, createdAt time.Time) (*Order, err
 	if len(items) > MaxItems {
 		return nil, ErrTooManyItems
 	}
+	if len(items) == 0 {
+		return nil, ErrEmptyOrder
+	}
 	for i, item := range items {
 		if err := item.validate(); err != nil {
 			return nil, fmt.Errorf("item %d: %w", i+1, err)
 		}
-	}
-	if len(items) == 0 {
-		return nil, ErrEmptyOrder
 	}
 	return &Order{uuid.New(), customerID, slices.Clone(items), StatusCreated, createdAt}, nil
 }
