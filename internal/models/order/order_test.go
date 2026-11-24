@@ -3,11 +3,11 @@ package order_test
 import (
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/gulmix/orders/internal/models/order"
 )
 
@@ -71,7 +71,8 @@ func mustItem(t *testing.T, sku string, qty int, priceCents int64) order.Item {
 }
 
 func TestNewOrder(t *testing.T) {
-	testTime := time.Date(2006, time.October, 8, 5, 12, 13, 0, time.UTC)
+	testvalueCreatedAt := time.Date(2006, time.October, 8, 5, 12, 13, 0, time.UTC)
+	testvalueCustomerID := "dktb-1205-po35-m5n7"
 	tests := []struct {
 		name       string
 		customerID string
@@ -80,12 +81,15 @@ func TestNewOrder(t *testing.T) {
 		wantTotal  int64
 		wantErr    error
 	}{
-		{name: "valid", customerID: "abcefg", items: []order.Item{mustItem(t, "soundtrack", 1, 249)}, createdAt: testTime, wantTotal: 249},
-		{name: "empty order", customerID: "abcefg", items: []order.Item{}, createdAt: testTime, wantTotal: 249, wantErr: order.ErrEmptyOrder},
-		{name: "nil order", customerID: "abcefg", items: nil, createdAt: testTime, wantTotal: 249, wantErr: order.ErrEmptyOrder},
-		{name: "empty item", customerID: "abcefg", items: []order.Item{mustItem(t, "soundtrack", 1, 249), {}}, createdAt: testTime, wantTotal: 249, wantErr: order.ErrInvalidQty},
-		{name: "empty customerID", customerID: " ", items: []order.Item{mustItem(t, "soundtrack", 1, 249)}, createdAt: testTime, wantTotal: 249, wantErr: order.ErrEmptyCustomerID},
-		{name: "tabulation in customerID", customerID: "\t", items: []order.Item{mustItem(t, "soundtrack", 1, 249)}, createdAt: testTime, wantTotal: 249, wantErr: order.ErrEmptyCustomerID},
+		{name: "valid", customerID: testvalueCustomerID, items: []order.Item{mustItem(t, "soundtrack", 1, 249)}, createdAt: testvalueCreatedAt, wantTotal: 249},
+		{name: "want total with several items", customerID: testvalueCustomerID, items: []order.Item{mustItem(t, "soundtrack", 1, 500), mustItem(t, "drumkit", 2, 2000), mustItem(t, "ebook", 1, 0)}, createdAt: testvalueCreatedAt, wantTotal: 4500},
+		{name: "empty order", customerID: testvalueCustomerID, items: []order.Item{}, createdAt: testvalueCreatedAt, wantErr: order.ErrEmptyOrder},
+		{name: "nil order", customerID: testvalueCustomerID, items: nil, createdAt: testvalueCreatedAt, wantErr: order.ErrEmptyOrder},
+		{name: "empty item", customerID: testvalueCustomerID, items: []order.Item{mustItem(t, "soundtrack", 1, 249), {}}, createdAt: testvalueCreatedAt, wantErr: order.ErrInvalidQty},
+		{name: "empty customerID", customerID: "", items: []order.Item{mustItem(t, "soundtrack", 1, 249)}, createdAt: testvalueCreatedAt, wantErr: order.ErrEmptyCustomerID},
+		{name: "customerID with spaces", customerID: " ", items: []order.Item{mustItem(t, "soundtrack", 1, 249)}, createdAt: testvalueCreatedAt, wantErr: order.ErrEmptyCustomerID},
+		{name: "tabulation in customerID", customerID: "\t", items: []order.Item{mustItem(t, "soundtrack", 1, 249)}, createdAt: testvalueCreatedAt, wantErr: order.ErrEmptyCustomerID},
+		{name: "too many items", customerID: testvalueCustomerID, items: make([]order.Item, order.MaxItems+1), createdAt: testvalueCreatedAt, wantErr: order.ErrTooManyItems},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,7 +112,7 @@ func TestNewOrder(t *testing.T) {
 			if got := ord.Status(); got != order.StatusCreated {
 				t.Errorf("Status() = %v, want %v", got, order.StatusCreated)
 			}
-			if got := strings.TrimSpace(ord.CustomerID()); got != tc.customerID {
+			if got := ord.CustomerID(); got != tc.customerID {
 				t.Errorf("CustomerID() = %v, want %v", got, tc.customerID)
 			}
 			if got := ord.CreatedAt(); got.Compare(tc.createdAt) != 0 {
@@ -121,5 +125,46 @@ func TestNewOrder(t *testing.T) {
 				t.Errorf("Total() = %d, want %d", got, tc.wantTotal)
 			}
 		})
+	}
+}
+
+func TestNewOrder_IDUniqueness(t *testing.T) {
+	items := []order.Item{mustItem(t, "soundtrack", 1, 249)}
+	createdAt := time.Date(2006, time.October, 8, 5, 12, 13, 0, time.UTC)
+
+	ord1, err := order.NewOrder("cust-1", items, createdAt)
+	if err != nil {
+		t.Fatalf("error creating ord1: %v", err)
+	}
+
+	ord2, err := order.NewOrder("cust-2", items, createdAt)
+	if err != nil {
+		t.Fatalf("error creating ord2: %v", err)
+	}
+
+	if ord1.ID() == ord2.ID() {
+		t.Errorf("expected unique IDs, got identical ID %v", ord1.ID())
+	}
+}
+
+func TestOrder_Immutability(t *testing.T) {
+	initialItem := mustItem(t, "soundtrack", 1, 249)
+	items := []order.Item{initialItem}
+	createdAt := time.Date(2006, time.October, 8, 5, 12, 13, 0, time.UTC)
+
+	ord, err := order.NewOrder("cust-1", items, createdAt)
+	if err != nil {
+		t.Fatalf("unexpected error creating order: %v", err)
+	}
+
+	items[0] = mustItem(t, "mutated", 2, 500)
+	if got := ord.Items(); !slices.Equal(got, []order.Item{initialItem}) {
+		t.Errorf("order items were mutated through input slice: got %+v, want %+v", got, []order.Item{initialItem})
+	}
+
+	returnedItems := ord.Items()
+	returnedItems[0] = mustItem(t, "mutated", 2, 500)
+	if got := ord.Items(); !slices.Equal(got, []order.Item{initialItem}) {
+		t.Errorf("order items were mutated through Items() getter: got %+v, want %+v", got, []order.Item{initialItem})
 	}
 }
